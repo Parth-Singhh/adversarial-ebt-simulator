@@ -1,64 +1,93 @@
 #include "EpidemicNode.h"
-#include "EpidemicMessage_m.h"
 
 #include <algorithm>
-#include <cmath>
-#include <random>
+
+#include "EpidemicMessage_m.h"
+#include "StatsCollector.h"
 
 Define_Module(EpidemicNode);
+
+enum {
+    KIND_FORWARD = 100
+};
 
 void EpidemicNode::initialize()
 {
     nodeId = par("nodeId");
     numNodes = par("numNodes");
-    source = par("isSource");
-
     fanout = par("fanout");
+    maxMessages = par("maxMessages");
     forwardDelay = par("forwardDelay");
     gossipDelay = par("gossipDelay");
+    maliciousJitterMax = par("maliciousJitterMax");
 
-    startMessage = new cMessage("startBroadcast");
+    malicious = par("isMalicious");
+    attackType = AttackModel::parseAttackType(par("attackType").stdstringValue());
+    if (!malicious)
+        attackType = AttackType::Honest;
 
-    WATCH(nodeId);
-    WATCH(fanout);
+    firstReceptionSignal = registerSignal("firstReception");
+    duplicateSignal = registerSignal("duplicateReception");
+    transmitSignal = registerSignal("transmission");
+    dropSignal = registerSignal("drop");
+    maliciousSignal = registerSignal("maliciousAction");
 
-    if (source)
-        scheduleAt(SIMTIME_ZERO + uniform(0, 1e-6), startMessage);
+    refreshNeighborCache();
 }
 
-int EpidemicNode::gateToNode(int gateIndex) const
+void EpidemicNode::configureRole(bool maliciousRole, AttackType type)
 {
-    cGate *g = gate("port$o", gateIndex);
-    cGate *next = g->getNextGate();
-    if (!next)
-        return -1;
-
-    cModule *remote = next->getOwnerModule();
-    if (!remote)
-        return -1;
-
-    return remote->par("nodeId");
+    malicious = maliciousRole;
+    attackType = maliciousRole ? type : AttackType::Honest;
 }
 
-bool EpidemicNode::hasSeen(int messageId) const
+StatsCollector *EpidemicNode::collector() const
 {
-    return parent.find(messageId) != parent.end();
+    return check_and_cast<StatsCollector *>(getParentModule()->getSubmodule("collector"));
 }
 
-std::vector<int> EpidemicNode::selectRandomNeighbors(int excludeGateIndex,
-                                                       int desiredFanout)
+BroadcastId EpidemicNode::keyFromPacket(const EpidemicMessage *msg) const
 {
-    std::vector<int> candidates;
+    BroadcastId key;
+    key.sessionId = msg->getSessionId();
+    key.originId = msg->getOriginId();
+    key.sequenceNo = msg->getBroadcastSeq();
+    return key;
+}
+
+void EpidemicNode::refreshNeighborCache()
+{
+    gateByNeighborId.clear();
 
     for (int i = 0; i < gateSize("port"); ++i) {
-        if (i == excludeGateIndex)
+        cGate *outGate = gate("port$o", i);
+        cGate *next = outGate ? outGate->getNextGate() : nullptr;
+        if (!next)
             continue;
 
-        if (gate("port$o", i)->getNextGate() != nullptr)
-            candidates.push_back(i);
+        cModule *remote = next->getOwnerModule();
+        if (!remote)
+            continue;
+
+        int neighborId = remote->par("nodeId");
+        gateByNeighborId[neighborId] = i;
+    }
+}
+
+std::vector<int> EpidemicNode::selectRandomNeighbors(int excludeNeighborId, int desiredFanout)
+{
+    if (gateByNeighborId.empty())
+        refreshNeighborCache();
+
+    std::vector<int> candidates;
+    candidates.reserve(gateByNeighborId.size());
+
+    for (const auto& kv : gateByNeighborId) {
+        if (kv.first == excludeNeighborId)
+            continue;
+        candidates.push_back(kv.first);
     }
 
-    // Fisher-Yates shuffle using OMNeT++ RNG.
     for (int i = (int)candidates.size() - 1; i > 0; --i) {
         int j = intuniform(0, i);
         std::swap(candidates[i], candidates[j]);
@@ -70,168 +99,182 @@ std::vector<int> EpidemicNode::selectRandomNeighbors(int excludeGateIndex,
     return candidates;
 }
 
-void EpidemicNode::startBroadcast()
+void EpidemicNode::triggerBroadcast(int sessionId, int sequenceNo)
 {
-    int messageId = getId() * 1000000 + nextMessageId++;
+    BroadcastId key{sessionId, nodeId, sequenceNo};
+    auto& state = stateByBroadcast[key];
 
-    parent[messageId] = -1;
-    depth[messageId] = 0;
+    if (state.seen)
+        return;
 
-    totalFirstReceptions++;
+    state.seen = true;
+    state.parentId = -1;
+    state.depth = 0;
+    state.firstSeenTime = simTime();
+    state.forwardScheduled = true;
+    state.acceptedParents.push_back(-1);
 
-    EV_INFO << "Node " << nodeId
-            << " starts epidemic broadcast, messageId="
-            << messageId << endl;
+    totalAcceptedBroadcasts++;
 
-    forwardMessage(messageId, nodeId, 0, simTime());
-}
+    collector()->recordSourceStart(key, nodeId, simTime());
+    collector()->recordParentCommit(key, nodeId, -1, 0, simTime());
 
-void EpidemicNode::scheduleForward(EpidemicMessage *msg)
-{
-    // Copy only the information needed for forwarding. The original packet is
-    // deleted by the caller after processing.
-    int messageId = msg->getMessageId();
-    int originId = msg->getOriginId();
-    int hopCount = msg->getHopCount();
-    simtime_t creationTime = msg->getCreationTime();
-
-    auto *event = new cMessage("forwardEpidemic");
-    event->addPar("messageId") = messageId;
-    event->addPar("originId") = originId;
-    event->addPar("hopCount") = hopCount;
-    event->addPar("creationTime") = creationTime;
-
+    auto *event = new cMessage("forwardBroadcast", KIND_FORWARD);
+    event->addPar("sessionId") = key.sessionId;
+    event->addPar("originId") = key.originId;
+    event->addPar("sequenceNo") = key.sequenceNo;
     scheduleAt(simTime() + forwardDelay, event);
 }
 
-void EpidemicNode::forwardMessage(int messageId, int originId, int hopCount,
-                                  simtime_t creationTime)
+void EpidemicNode::sendToNeighbor(const BroadcastId& key, BroadcastState& state, int neighborId,
+                                  int senderId, int originId, int attackTag,
+                                  simtime_t extraDelay)
 {
-    int incomingGate = -1;
+    auto gateIt = gateByNeighborId.find(neighborId);
+    if (gateIt == gateByNeighborId.end())
+        return;
 
-    // The parent gate is not stored explicitly. For a fully connected graph,
-    // exclude the parent by looking up the parent node ID.
-    auto pIt = parent.find(messageId);
-    if (pIt != parent.end() && pIt->second >= 0) {
-        int parentId = pIt->second;
-        for (int i = 0; i < gateSize("port"); ++i) {
-            if (gateToNode(i) == parentId) {
-                incomingGate = i;
-                break;
-            }
+    auto *out = new EpidemicMessage("epidemicBroadcast");
+    out->setSessionId(key.sessionId);
+    out->setBroadcastSeq(key.sequenceNo);
+    out->setOriginId(originId);
+    out->setSenderId(senderId);
+    out->setHopCount(state.depth + 1);
+    out->setCreationTime(state.firstSeenTime);
+    out->setAttackTag(attackTag);
+    out->setSpoofed(senderId != nodeId || originId != key.originId);
+    out->setByteLength(48);
+
+    sendDelayed(out, gossipDelay + extraDelay, "port$o", gateIt->second);
+    state.forwardedPeers.insert(neighborId);
+
+    emit(transmitSignal, 1L);
+    collector()->recordTransmission(key, nodeId, neighborId);
+}
+
+void EpidemicNode::processForwardEvent(const BroadcastId& key)
+{
+    auto it = stateByBroadcast.find(key);
+    if (it == stateByBroadcast.end())
+        return;
+
+    BroadcastState& state = it->second;
+    if (state.forwarded || state.terminal)
+        return;
+
+    collector()->recordParentCommit(key, nodeId, state.parentId, state.depth, state.firstSeenTime);
+
+    auto selected = selectRandomNeighbors(state.parentId, fanout);
+    bool droppedAll = true;
+
+    for (int neighborId : selected) {
+        AttackDecision decision = malicious
+            ? AttackModel::decide(attackType, nodeId, neighborId, maliciousJitterMax)
+            : AttackDecision{};
+
+        if (malicious && attackType != AttackType::Honest) {
+            emit(maliciousSignal, 1L);
+            collector()->recordMaliciousAction(key, nodeId, AttackModel::toString(attackType).c_str());
         }
+
+        if (decision.drop) {
+            emit(dropSignal, 1L);
+            collector()->recordDrop(key, nodeId, "attack_drop");
+            continue;
+        }
+
+        droppedAll = false;
+
+        int senderId = decision.spoofMetadata ? ((nodeId + 7) % std::max(1, numNodes)) : nodeId;
+        int originId = decision.spoofMetadata ? ((key.originId + 13) % std::max(1, numNodes)) : key.originId;
+        int attackTag = decision.equivocate ? (nodeId * 1000 + neighborId) : 0;
+
+        sendToNeighbor(key, state, neighborId, senderId, originId, attackTag, decision.extraDelay);
+
+        for (int n = 0; n < decision.duplicateBurst; ++n)
+            sendToNeighbor(key, state, neighborId, senderId, originId, attackTag, decision.extraDelay);
     }
 
-    auto selected = selectRandomNeighbors(incomingGate, fanout);
-
-    for (int gateIndex : selected) {
-        auto *out = new EpidemicMessage("epidemicBroadcast");
-        out->setMessageId(messageId);
-        out->setOriginId(originId);
-        out->setSenderId(nodeId);
-        out->setHopCount(hopCount + 1);
-        out->setCreationTime(creationTime);
-        out->setByteLength(32);
-
-        sendDelayed(out, gossipDelay, "port$o", gateIndex);
-        totalTransmissions++;
+    if (droppedAll && !selected.empty()) {
+        emit(dropSignal, 1L);
+        collector()->recordDrop(key, nodeId, "all_candidates_dropped");
     }
 
-    coverageVector.record((double)parent.size() / (double)numNodes);
-    transmissionsVector.record(totalTransmissions);
-
-    long duplicateCount = 0;
-    for (const auto& x : duplicateReception)
-        duplicateCount += x.second;
-    duplicatesVector.record(duplicateCount);
-
-    long edges = 0;
-    for (const auto& x : children)
-        edges += x.second.size();
-    treeEdgesVector.record(edges);
+    state.forwarded = true;
+    state.terminal = true;
 }
 
-void EpidemicNode::recordTreeEdge(int child, int p)
+void EpidemicNode::onReceive(EpidemicMessage *msg)
 {
-    children[p].insert(child);
-}
+    BroadcastId key = keyFromPacket(msg);
+    auto& state = stateByBroadcast[key];
 
-void EpidemicNode::receiveEpidemicMessage(EpidemicMessage *msg)
-{
-    const int messageId = msg->getMessageId();
+    if (!state.seen && totalAcceptedBroadcasts >= maxMessages) {
+        emit(dropSignal, 1L);
+        collector()->recordDrop(key, nodeId, "max_messages_limit");
+        delete msg;
+        return;
+    }
+
     const int senderId = msg->getSenderId();
     const int hopCount = msg->getHopCount();
 
-    if (hasSeen(messageId)) {
-        duplicateReception[messageId]++;
-        totalDuplicates++;
+    if (!state.seen) {
+        state.seen = true;
+        state.parentId = senderId;
+        state.depth = hopCount;
+        state.firstSeenTime = simTime();
+        state.forwardScheduled = true;
+        state.acceptedParents.push_back(senderId);
 
-        EV_DEBUG << "Node " << nodeId
-                 << " ignores duplicate message " << messageId
-                 << " from node " << senderId << endl;
+        totalAcceptedBroadcasts++;
+
+        emit(firstReceptionSignal, 1L);
+
+        auto *event = new cMessage("forwardBroadcast", KIND_FORWARD);
+        event->addPar("sessionId") = key.sessionId;
+        event->addPar("originId") = key.originId;
+        event->addPar("sequenceNo") = key.sequenceNo;
+        scheduleAt(simTime() + forwardDelay, event);
 
         delete msg;
         return;
     }
 
-    // First reception establishes the tree parent.
-    parent[messageId] = senderId;
-    depth[messageId] = hopCount;
+    state.duplicateCount++;
+    emit(duplicateSignal, 1L);
+    collector()->recordDuplicate(key, nodeId);
 
-    recordTreeEdge(nodeId, senderId);
-    totalFirstReceptions++;
+    if (!state.forwarded && simTime() == state.firstSeenTime) {
+        bool betterDepth = hopCount < state.depth;
+        bool tieBreakSender = (hopCount == state.depth && senderId < state.parentId);
 
-    EV_INFO << "Node " << nodeId
-            << " first received message " << messageId
-            << " from parent " << senderId
-            << ", depth=" << hopCount << endl;
-
-    scheduleForward(msg);
+        if (betterDepth || tieBreakSender) {
+            state.rejectedParents.push_back(state.parentId);
+            state.parentId = senderId;
+            state.depth = hopCount;
+            state.acceptedParents.push_back(senderId);
+        } else {
+            state.rejectedParents.push_back(senderId);
+        }
+    }
 
     delete msg;
 }
 
 void EpidemicNode::handleMessage(cMessage *msg)
 {
-    if (msg == startMessage) {
-        startBroadcast();
-        return;
-    }
+    if (msg->isSelfMessage() && msg->getKind() == KIND_FORWARD) {
+        BroadcastId key;
+        key.sessionId = msg->par("sessionId");
+        key.originId = msg->par("originId");
+        key.sequenceNo = msg->par("sequenceNo");
 
-    // Self-message generated for delayed forwarding.
-    if (msg->isSelfMessage()) {
-        int messageId = msg->par("messageId");
-        int originId = msg->par("originId");
-        int hopCount = msg->par("hopCount");
-        simtime_t creationTime = msg->par("creationTime");
-
-        forwardMessage(messageId, originId, hopCount, creationTime);
+        processForwardEvent(key);
         delete msg;
         return;
     }
 
     auto *packet = check_and_cast<EpidemicMessage *>(msg);
-    receiveEpidemicMessage(packet);
-}
-
-void EpidemicNode::finish()
-{
-    long totalTreeEdges = 0;
-    long maxDepth = 0;
-
-    // This module stores only its local portion of the tree.
-    for (const auto& item : children)
-        totalTreeEdges += item.second.size();
-
-    for (const auto& item : depth)
-        maxDepth = std::max(maxDepth, (long)item.second);
-
-    recordScalar("nodeId", nodeId);
-    recordScalar("firstReceptions", totalFirstReceptions);
-    recordScalar("duplicateReceptions", totalDuplicates);
-    recordScalar("transmissions", totalTransmissions);
-    recordScalar("localTreeEdges", totalTreeEdges);
-    recordScalar("maximumLocalDepth", maxDepth);
-
-    delete startMessage;
+    onReceive(packet);
 }
