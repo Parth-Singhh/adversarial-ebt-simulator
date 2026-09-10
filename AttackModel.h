@@ -1,25 +1,20 @@
 #ifndef __ADVERSARIAL_EBT_ATTACKMODEL_H
 #define __ADVERSARIAL_EBT_ATTACKMODEL_H
 
-#include <omnetpp.h>
+#include <memory>
+#include <set>
 #include <string>
+
+#include "AttackPolicy.h"
 
 enum class AttackType {
     Honest,
-    Drop,
+    DropAll,
+    ProbabilisticForward,
+    Delay,
     SelectiveForward,
-    DelayJitter,
-    FloodDuplicates,
-    Equivocation,
-    SpoofMetadata
-};
-
-struct AttackDecision {
-    bool drop = false;
-    int duplicateBurst = 0;
-    simtime_t extraDelay = SIMTIME_ZERO;
-    bool equivocate = false;
-    bool spoofMetadata = false;
+    Isolation,
+    FloodDuplicates
 };
 
 class AttackModel
@@ -27,8 +22,8 @@ class AttackModel
   public:
     static AttackType parseAttackType(const std::string& value);
     static std::string toString(AttackType type);
-    static AttackDecision decide(AttackType type, int nodeId, int neighborId,
-                                 simtime_t jitterMax);
+    static std::unique_ptr<AttackPolicy> createPolicy(AttackType type);
+    static std::set<int> parseNodeSet(const std::string& value, int maxNodes);
 };
 
 #endif

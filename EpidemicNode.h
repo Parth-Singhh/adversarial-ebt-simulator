@@ -1,6 +1,7 @@
 #ifndef __EPIDEMICBROADCASTTREE_EPIDEMICNODE_H
 #define __EPIDEMICBROADCASTTREE_EPIDEMICNODE_H
 
+#include <memory>
 #include <omnetpp.h>
 #include <unordered_map>
 #include <unordered_set>
@@ -16,10 +17,23 @@ class StatsCollector;
 class EpidemicNode : public cSimpleModule
 {
   public:
-    void configureRole(bool maliciousRole, AttackType type);
+    void configureRole(bool maliciousRole, AttackType type, const AttackConfig& config);
     void triggerBroadcast(int sessionId, int sequenceNo);
 
   protected:
+    struct ReceptionEvent {
+        int senderId = -1;
+        int hopCount = 0;
+        simtime_t at = SIMTIME_ZERO;
+    };
+
+    struct ForwardAttempt {
+        int neighborId = -1;
+        bool sent = false;
+        simtime_t delay = SIMTIME_ZERO;
+        std::string reason;
+    };
+
     struct BroadcastState {
         bool seen = false;
         bool forwardScheduled = false;
@@ -30,24 +44,30 @@ class EpidemicNode : public cSimpleModule
         int depth = 0;
 
         simtime_t firstSeenTime = SIMTIME_ZERO;
+        simtime_t commitDeadline = SIMTIME_ZERO;
 
         std::unordered_set<int> forwardedPeers;
         long duplicateCount = 0;
         std::vector<int> acceptedParents;
         std::vector<int> rejectedParents;
+        std::vector<ReceptionEvent> receptions;
+        std::vector<ForwardAttempt> forwardAttempts;
     };
 
     int nodeId = -1;
     int numNodes = 0;
+    int runId = 0;
+    int sourceNode = 0;
 
     int fanout = 3;
     int maxMessages = 1000;
     simtime_t forwardDelay;
     simtime_t gossipDelay;
-    simtime_t maliciousJitterMax;
 
     bool malicious = false;
     AttackType attackType = AttackType::Honest;
+    AttackConfig attackConfig;
+    std::unique_ptr<AttackPolicy> attackPolicy;
 
     int totalAcceptedBroadcasts = 0;
 
@@ -70,7 +90,7 @@ class EpidemicNode : public cSimpleModule
     void onReceive(class EpidemicMessage *msg);
     void processForwardEvent(const BroadcastId& key);
     void sendToNeighbor(const BroadcastId& key, BroadcastState& state, int neighborId,
-                        int senderId, int originId, int attackTag, simtime_t extraDelay);
+                        int senderId, int originId, const AttackOutcome& outcome);
 
     StatsCollector *collector() const;
 };
