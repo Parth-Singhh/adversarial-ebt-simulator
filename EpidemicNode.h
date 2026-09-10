@@ -6,66 +6,73 @@
 #include <unordered_set>
 #include <vector>
 
+#include "AttackModel.h"
+#include "BroadcastId.h"
+
 using namespace omnetpp;
+
+class StatsCollector;
 
 class EpidemicNode : public cSimpleModule
 {
+  public:
+    void configureRole(bool maliciousRole, AttackType type);
+    void triggerBroadcast(int sessionId, int sequenceNo);
+
   protected:
+    struct BroadcastState {
+        bool seen = false;
+        bool forwardScheduled = false;
+        bool forwarded = false;
+        bool terminal = false;
+
+        int parentId = -1;
+        int depth = 0;
+
+        simtime_t firstSeenTime = SIMTIME_ZERO;
+
+        std::unordered_set<int> forwardedPeers;
+        long duplicateCount = 0;
+        std::vector<int> acceptedParents;
+        std::vector<int> rejectedParents;
+    };
+
     int nodeId = -1;
     int numNodes = 0;
-    bool source = false;
 
     int fanout = 3;
+    int maxMessages = 1000;
     simtime_t forwardDelay;
     simtime_t gossipDelay;
+    simtime_t maliciousJitterMax;
 
-    int nextMessageId = 0;
+    bool malicious = false;
+    AttackType attackType = AttackType::Honest;
 
-    // messageId -> parent node ID.
-    // The source has parent = -1.
-    std::unordered_map<int, int> parent;
+    int totalAcceptedBroadcasts = 0;
 
-    // messageId -> hop/depth of this node.
-    std::unordered_map<int, int> depth;
+    std::unordered_map<BroadcastId, BroadcastState, BroadcastIdHash> stateByBroadcast;
+    std::unordered_map<int, int> gateByNeighborId;
 
-    // messageId -> set of children in the epidemic tree.
-    std::unordered_map<int, std::unordered_set<int>> children;
-
-    // Number of duplicate receptions per message.
-    std::unordered_map<int, long> duplicateReception;
-
-    cMessage *startMessage = nullptr;
-
-    // Statistics.
-    cLongHistogram numTreeChildrenHist;
-    cLongHistogram depthHist;
-
-    cOutVector coverageVector;
-    cOutVector transmissionsVector;
-    cOutVector duplicatesVector;
-    cOutVector treeEdgesVector;
-
-    long totalTransmissions = 0;
-    long totalDuplicates = 0;
-    long totalFirstReceptions = 0;
+    simsignal_t firstReceptionSignal;
+    simsignal_t duplicateSignal;
+    simsignal_t transmitSignal;
+    simsignal_t dropSignal;
+    simsignal_t maliciousSignal;
 
     virtual void initialize() override;
     virtual void handleMessage(cMessage *msg) override;
-    virtual void finish() override;
 
-    void startBroadcast();
-    void receiveEpidemicMessage(EpidemicMessage *msg);
+    BroadcastId keyFromPacket(const class EpidemicMessage *msg) const;
+    void refreshNeighborCache();
+    std::vector<int> selectRandomNeighbors(int excludeNeighborId, int desiredFanout);
 
-    void scheduleForward(EpidemicMessage *msg);
-    void forwardMessage(int messageId, int originId, int hopCount,
-                        simtime_t creationTime);
+    void onReceive(class EpidemicMessage *msg);
+    void processForwardEvent(const BroadcastId& key);
+    void sendToNeighbor(const BroadcastId& key, BroadcastState& state, int neighborId,
+                        int senderId, int originId, int attackTag, simtime_t extraDelay);
 
-    std::vector<int> selectRandomNeighbors(int excludeGateIndex, int desiredFanout);
-
-    bool hasSeen(int messageId) const;
-    int gateToNode(int gateIndex) const;
-
-    void recordTreeEdge(int child, int p);
+    StatsCollector *collector() const;
 };
 
 #endif
