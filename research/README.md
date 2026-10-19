@@ -1,31 +1,43 @@
-# EBT simulation results: automated analysis
+# EBT Research Results and Reproducibility
 
-## Contents
-- `broadcast_metrics.csv`: one row per broadcast observation (330 expected).
-- `run_metrics.csv`: one row per independent simulation repetition (110 expected).
-- `condition_summary.csv`: mean metrics by experimental condition.
-- `quality_checks.csv`: structural validation issues.
-- PNG files: key plots.
+This directory contains the derived metrics, research figures, and raw simulation-result archives for **Investigating the Resilience of Epidemic Broadcast Trees Against Malicious Behaviour**.
 
-## Experiment coverage
-- 135 selected `.sca` files analyzed: 110 sweep outputs from the ZIP plus 25 selected fixed-60-node outputs; five seeds/repetitions per condition; three broadcasts per file (405 observations).
-- Malicious-fraction study: N=60; fractions 5%, 20%, 30%; four attack types; five repetitions each.
-- Network-size study: N=30, 60, and 100; baseline plus four attack conditions; five repetitions each. N=30/100 are from the ZIP; N=60 is from the matching fixed-size runs uploaded separately.
-- Topology is reported as one connected component in the parsed results; edge counts were checked against a complete graph for each N.
-- All observed `treeValid` scalar values are 1.
+## Regenerate the analysis
 
-## Measurement notes
-- Coverage, transmission count, duplicates, drops, malicious actions and tree statistics are first averaged over the three broadcasts inside each repetition; condition-level means and standard deviations are then computed across five repetitions where applicable.
-- Full delivery means the recorded `completionTime` is non-negative. Coverage can be close to 100% even when full delivery is not achieved.
-- `timeTo90pctReachable` and `timeTo95pctReachable` are reported only when those thresholds were reached. Threshold rates use only broadcast observations where the respective metric was instrumented. The earlier fixed-60-node `.sca` files predate the `timeTo95pctReachable` scalar, so their T95 result is blank—not zero. The CSV includes instrumentation counts to make this explicit.
-- Do not interpret three broadcasts within one simulation repetition as three independent random seeds.
+From the repository root, using Python 3.10 or later:
 
-## Important limitation
-- The ZIP alone contains the 110 sweep runs. To complete the 30/60/100-node scaling analysis, I separately included only one consistent five-repetition set for each of the earlier fixed-60-node configurations and excluded duplicate uploads/reruns.
-- The results are simulator observations for the configured complete topology, fanout and attack parameters; they should not be generalized to real networks without additional validation.
+```bash
+python -m pip install -r research/requirements.txt
+python research/scripts/analyze_results.py
+```
 
-## Quality check totals
-- Broadcast observations: 405; full-delivery observations: 119/405 (29.4%).
-- Broadcast observations without a recorded 90% threshold time: 2.
-- Broadcasts with an instrumented T95 metric but no T95 timestamp: 18; older fixed-60-node broadcasts without T95 instrumentation: 78.
-- Quality-check rows: 0 (some threshold-time fields are naturally absent when a broadcast did not reach the threshold; see `quality_checks.csv`).
+The script reads only the committed input archives:
+
+- `research/raw/results_full_sweep.zip` — 110 sweep `.sca` files for the malicious-fraction and network-size experiments.
+- `research/raw/fixed60_core.zip` — 25 fixed 60-node `.sca` files used as the middle-size comparison.
+
+It regenerates:
+
+- `research/analysis/broadcast_metrics.csv` — one row per broadcast.
+- `research/analysis/run_metrics.csv` — one row per simulation repetition/file.
+- `research/analysis/condition_summary.csv` — condition-level averages and between-run standard deviations.
+- `research/analysis/quality_checks.csv` — empty apart from its header when checks pass; non-empty output should be reviewed.
+- Four PNGs under `research/figures/`.
+- `research/paper_ready_results.md` — a results summary derived from the same analysis data.
+
+The script uses only Python's standard library plus Matplotlib. It does not change the raw ZIP files. To process alternate archives, pass `--sweep-archive` and `--fixed-archive`; to write outputs to another clone/root, pass `--root`.
+
+## Experiment design
+
+- Complete graph topology; tested sizes: 30, 60, and 100 nodes.
+- Fanout 4, forwarding delay 10 ms, gossip delay 1 ms, three broadcasts spaced 250 ms apart, simulated-time limit 20 s.
+- Malicious-fraction sweep: 60 nodes, 5%, 20%, and 30% malicious peers; Drop-All, Selective Forwarding, Delay/Jitter, and Isolation.
+- Network-size comparison: 30 and 100 nodes with baseline and four attack conditions; 60-node runs provide the intermediate comparison.
+- Five repetitions (seed sets 0–4) per condition.
+
+## Interpretation cautions
+
+- Full delivery and mean coverage are different metrics. A high average coverage score does not imply every node received every broadcast.
+- Tree-validity checks verify the recorded dissemination-tree structure; they do not imply complete reachability.
+- T95 metrics are absent from the older fixed-60-node `.sca` files; the script preserves those missing values rather than imputing them.
+- Results are conditional on these implementation choices and a complete graph; do not generalize them to sparse overlays without more experiments.

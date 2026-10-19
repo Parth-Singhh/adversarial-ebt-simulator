@@ -1,0 +1,2 @@
+# Requirements for regenerating EBT analysis tables and plots
+matplotlib>=3.7
