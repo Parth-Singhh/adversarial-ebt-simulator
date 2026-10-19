@@ -29,7 +29,7 @@ struct AttackContext {
 struct AttackOutcome {
     bool drop = false;
     int duplicateBurst = 0;
-    simtime_t extraDelay = SIMTIME_ZERO;
+    omnetpp::simtime_t extraDelay = SIMTIME_ZERO;
     bool spoofMetadata = false;
     bool equivocate = false;
     int payloadVariantId = 0;

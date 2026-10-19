@@ -25,43 +25,43 @@ network EpidemicBroadcastTree
     submodules:
         collector: StatsCollector {
             parameters:
-                numNodes = numNodes;
-                sourceNode = sourceNode;
+                numNodes = parent.numNodes;
+                sourceNode = parent.sourceNode;
                 @display("p=120,40");
         }
 
         controller: ExperimentController {
             parameters:
-                numNodes = numNodes;
-                sourceNode = sourceNode;
-                sessionId = sessionId;
-                numBroadcasts = numBroadcasts;
-                firstBroadcastAt = firstBroadcastAt;
-                broadcastInterval = broadcastInterval;
-                maliciousFraction = maliciousFraction;
-                maliciousSeed = maliciousSeed;
-                fixedMaliciousNodes = fixedMaliciousNodes;
-                attackType = attackType;
+                numNodes = parent.numNodes;
+                sourceNode = parent.sourceNode;
+                sessionId = parent.sessionId;
+                numBroadcasts = parent.numBroadcasts;
+                firstBroadcastAt = parent.firstBroadcastAt;
+                broadcastInterval = parent.broadcastInterval;
+                maliciousFraction = parent.maliciousFraction;
+                maliciousSeed = parent.maliciousSeed;
+                fixedMaliciousNodes = parent.fixedMaliciousNodes;
+                attackType = parent.attackType;
                 @display("p=320,40");
         }
 
         topologyBuilder: TopologyBuilder {
             parameters:
-                numNodes = numNodes;
-                sourceNode = sourceNode;
-                topologyMode = topologyMode;
-                erProbability = erProbability;
-                fixedDegree = fixedDegree;
-                graphFile = graphFile;
-                linkDelay = linkDelay;
+                numNodes = parent.numNodes;
+                sourceNode = parent.sourceNode;
+                topologyMode = parent.topologyMode;
+                erProbability = parent.erProbability;
+                fixedDegree = parent.fixedDegree;
+                graphFile = parent.graphFile;
+                linkDelay = parent.linkDelay;
                 @display("p=520,40");
         }
 
         node[numNodes]: EpidemicNode {
-            parameters:
+		parameters:
                 nodeId = index;
-                numNodes = numNodes;
-                attackType = attackType;
-                @display("p=100+uniform(0,700),140+uniform(0,450)");
-        }
+                numNodes = parent.numNodes;
+                sessionId = parent.sessionId;
+                @display("p=,,m,10,70,50;i=device/server");
+}
 }

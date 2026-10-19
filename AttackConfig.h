@@ -8,7 +8,7 @@
 struct AttackConfig {
     double forwardProb = 1.0;
     double selectiveTargetFraction = 0.5;
-    simtime_t maxExtraDelay = SIMTIME_ZERO;
+    omnetpp::simtime_t maxExtraDelay = SIMTIME_ZERO;
     std::string isolationMode = "none";
     std::set<int> isolatedPeers;
     bool enableSpoofMetadata = false;

@@ -9,7 +9,7 @@ simple EpidemicNode
         double forwardDelay @unit(s) = default(10ms);
         double gossipDelay @unit(s) = default(1ms);
         int maxMessages = default(1000);
-
+		int sessionId = default(1);
         double forwardProb = default(0.7);
         double selectiveTargetFraction = default(0.5);
         double maxExtraDelay @unit(s) = default(50ms);

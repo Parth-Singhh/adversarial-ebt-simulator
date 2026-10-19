@@ -67,3 +67,26 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+# Local IDE workspace
+/.metadata/
+/.settings/
+/.qtenvrc
+
+# Generated build products
+/out/
+/EpidemicMessage_m.cc
+/EpidemicMessage_m.h
+/adversarial-ebt-simulator
+/adversarial-ebt-simulator_dbg
+
+# Generated simulation outputs and temporary files
+/results/
+*.sca
+*.vec
+*.vci
+*.elog
+/full_sweep.log
+/results_full_sweep.zip
+/run_all_remaining_sweeps.ps1
+/run_all_remaining_sweeps.sh
+/PACKAGE_MANIFEST.txt

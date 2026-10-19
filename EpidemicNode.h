@@ -58,8 +58,11 @@ class EpidemicNode : public cSimpleModule
     int numNodes = 0;
     int runId = 0;
     int sourceNode = 0;
+    int sessionId = 1;
 
     int fanout = 3;
+
+
     int maxMessages = 1000;
     simtime_t forwardDelay;
     simtime_t gossipDelay;
